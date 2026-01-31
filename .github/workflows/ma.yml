@@ -1,0 +1,35 @@
+name: Build Mi 8 Pro Kernel
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04  # 锁定旧版 Ubuntu，兼容性最好
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: LineageOS/android_kernel_xiaomi_sdm845
+          ref: lineage-17.1
+          path: kernel
+
+      - name: Setup
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git bc zip
+
+      - name: Build
+        run: |
+          cd kernel
+          export ARCH=arm64
+          make O=out ${DEFCONFIG}
+          make -j$(nproc) O=out \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: kernel/out/arch/arm64/boot/Image.gz-dtb
