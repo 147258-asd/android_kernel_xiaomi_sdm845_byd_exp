@@ -1,0 +1,45 @@
+name: Build Kali NetHunter Kernel for Mi 8 Pro (equuleus)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: '内核源码分支'
+        required: true
+        default: 'lineage-17.1'
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+env:
+  DEVICE: equuleus
+  KERNEL_DIR: kernel-source
+  DEFCONFIG: equuleus_defconfig
+  ARCH: arm64
+  SUBARCH: arm64
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: 'LineageOS/android_kernel_xiaomi_sdm845'
+          ref: ${{ github.event.inputs.kernel_branch }}
+          path: ${{ env.KERNEL_DIR }}
+          fetch-depth: 1
+
+      - name: Download NetHunter Patches
+        run: |
+          echo "正在从 Kali 官方仓库下载补丁..."
+          mkdir -p patches
+          cd patches
+          wget -
