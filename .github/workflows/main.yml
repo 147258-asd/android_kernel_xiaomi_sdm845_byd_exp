@@ -1,0 +1,31 @@
+name: Build Kernel for Mi 8 Pro
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: LineageOS/android_kernel_xiaomi_sdm845
+          ref: lineage-17.1
+          path: kernel
+      
+      - name: Setup
+        run: sudo apt-get update && sudo apt-get install -y git ccache bc build-essential zip
+      
+      - name: Toolchains
+        run: git clone --depth=1 https://github.com/kdrag0n/proton-clang.git $HOME/clang
+      
+      - name: Build
+        run: |
+          cd kernel
+          make O=out ARCH=arm64 equuleus_defconfig
+          make -j$(nproc) O=out ARCH=arm64 CC=$HOME/clang/bin/clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-
+      
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: kernel/out/arch/arm64/boot/Image.gz-dtb
