@@ -1,0 +1,137 @@
+name: Build Kali NetHunter Kernel for Mi 8 Pro (equuleu
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: '内核源码分支'
+        required: true
+        default: 'lineage-17.1'
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+env:
+  DEVICE: equuleus
+  KERNEL_DIR: kernel-source
+  DEFCONFIG: equuleus_defconfig
+  ARCH: arm64
+  SUBARCH: arm64
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    
+    steps:
+      # 1. 检出内核源码
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: 'LineageOS/android_kernel_xiaomi_sdm845'
+          ref: ${{ github.event.inputs.kernel_branch }}
+          path: ${{ env.KERNEL_DIR }}
+          fetch-depth: 1
+
+      # 2. 自动下载 NetHunter 补丁（修复 URL 错误）
+      - name: Download NetHunter Patches
+        run: |
+          echo "正在从 Kali 官方仓库下载补丁..."
+          mkdir -p patches
+          cd patches
+          
+          # 使用 curl 替代 wget，避免解析错误
+          curl -LO https://gitlab.com/kalilinux/nethunter/build-scripts/kali-nethunter-kernel/-/raw/main/patches/4.09/add-wifi-injection-4.14.patch
+          curl -LO https://gitlab.com/kalilinux/nethunter/build-scripts/kali-nethunter-kernel/-/raw/main/patches/4.09/fix-ath9k-naming-conflict.patch
+          curl -LO https://gitlab.com/kalilinux/nethunter/build-scripts/kali-nethunter-kernel/-/raw/main/patches/4.09/add-rtl88xxau-5.6.4.2-drivers.patch
+          
+          # 验证下载
+          echo "成功下载 $(ls *.patch | wc -l) 个补丁文件:"
+          ls -lh *.patch
+
+      # 3. 设置构建环境
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wget git ccache automake flex lzop bison gperf build-essential zip zlib1g-dev g++-multilib bc libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler kmod python3 python3-pip libssl-dev libelf-dev libdw-dev
+
+      # 4. 下载工具链
+      - name: Download Toolchains
+        run: |
+          mkdir -p ~/toolchains
+          git clone --depth=1 https://mirrors.bfsu.edu.cn/git/AOSP/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android-10.0.0_r32 ~/toolchains/aarch64-linux-android-4.9 &
+          git clone --depth=1 https://mirrors.bfsu.edu.cn/git/AOSP/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b android-10.0.0_r32 ~/toolchains/arm-linux-androideabi-4.9 &
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/toolchains/proton-clang &
+          wait
+
+      # 5. 设置环境变量
+      - name: Set Environment Variables
+        run: |
+          echo "PATH=/root/toolchains/proton-clang/bin:/root/toolchains/aarch64-linux-android-4.9/bin:/root/toolchains/arm-linux-androideabi-4.9/bin:$PATH" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_HOST=kali-nethunter" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_USER=github-actions" >> $GITHUB_ENV
+          echo "LOCALVERSION=-NetHunter" >> $GITHUB_ENV
+
+      # 6. 应用补丁（容错处理）
+      - name: Apply NetHunter Patches
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          echo "开始应用补丁..."
+          for patch in ../patches/*.patch; do
+            if [ -f "$patch" ]; then
+              echo "应用: $(basename $patch)"
+              patch -p1 < "$patch" || echo "⚠️ 补丁应用失败，继续..."
+            fi
+          done
+
+      # 7. 配置内核（NetHunter 功能）
+      - name: Configure Kernel
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          mkdir -p out
+          make O=out ARCH=${{ env.ARCH }} ${{ env.DEFCONFIG }}
+          echo "CONFIG_WIFI_INJECTION=y" >> out/.config
+          echo "CONFIG_PACKET=y" >> out/.config
+          echo "CONFIG_BT=y" >> out/.config
+          echo "CONFIG_BT_HCIBTUSB=y" >> out/.config
+          echo "CONFIG_USB_USBNET=y" >> out/.config
+          echo "CONFIG_MAC80211=y" >> out/.config
+          make O=out ARCH=${{ env.ARCH }} olddefconfig
+
+      # 8. 编译内核（核心步骤）
+      - name: Build Kernel
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          echo "开始编译，预计耗时 30-60 分钟..."
+          make -j$(nproc) O=out \
+            ARCH=${{ env.ARCH }} \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            LLVM_IAS=1 \
+            LLVM=1
+          
+          # 检查编译结果
+          if [ -f out/arch/${{ env.ARCH }}/boot/Image.gz-dtb ]; then
+            echo "✅ 内核编译成功！"
+          else
+            echo "❌ 内核编译失败"
+            exit 1
+          fi
+
+      # 9. 打包 AnyKernel3
+      - name: Create AnyKernel3 Package
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          cp ${KERNEL_
